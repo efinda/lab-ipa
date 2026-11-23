@@ -1,0 +1,6 @@
+{
+  "name": "SIM-LAB IPA SMA",
+  "description": "Aplikasi web manajemen Laboratorium IPA SMA terpadu untuk pengelolaan inventaris alat dan bahan kimia, pengajuan praktikum guru, jadwal lab, modul praktikum, absensi & nilai, serta laporan otomatis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
