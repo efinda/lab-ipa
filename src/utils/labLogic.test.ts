@@ -2,15 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInitialDatabaseState } from '../data/seedData';
 import {
+  addUserState,
   approvePengajuanState,
   checkScheduleConflict,
   completePengajuanState,
   computeChemicalStatus,
   computeMonthlyLabUsage,
   createPengajuanState,
+  deleteUserState,
   rejectPengajuanState,
   requestReturnByGuruState,
+  roleRequiresPassword,
+  updateUserState,
   validateItemStock,
+  verifyRolePassword,
 } from './labLogic';
 
 test('seed data memenuhi jumlah minimal alat, bahan, template, dan pengajuan', () => {
@@ -164,3 +169,116 @@ test('computeMonthlyLabUsage menghitung pemakaian per lab per bulan', () => {
   assert.ok(nov);
   assert.ok(nov.total >= 5);
 });
+
+test('verifikasi password login per role berjalan sesuai ketentuan', () => {
+  assert.equal(roleRequiresPassword('kepala_lab'), true);
+  assert.equal(roleRequiresPassword('guru_ipa'), true);
+  assert.equal(roleRequiresPassword('kepsek_tu'), true);
+  assert.equal(roleRequiresPassword('siswa'), false);
+
+  assert.equal(verifyRolePassword('kepala_lab', '970145'), true);
+  assert.equal(verifyRolePassword('kepala_lab', '@Sman5garut'), false);
+  assert.equal(verifyRolePassword('kepala_lab', ''), false);
+
+  assert.equal(verifyRolePassword('guru_ipa', '@Sman5garut'), true);
+  assert.equal(verifyRolePassword('guru_ipa', '@sman5garut'), false);
+  assert.equal(verifyRolePassword('guru_ipa', '970145'), false);
+
+  assert.equal(verifyRolePassword('kepsek_tu', '@Sman5garut'), true);
+  assert.equal(verifyRolePassword('kepsek_tu', 'salah'), false);
+
+  assert.equal(verifyRolePassword('siswa', ''), true);
+});
+
+test('admin dapat menambah, mengedit, dan menghapus user guru, kepala sekolah, dan siswa dengan validasi', () => {
+  const db0 = createInitialDatabaseState();
+
+  // Tambah Guru IPA baru
+  const addGuru = addUserState(db0, {
+    nama_lengkap: 'Siti Aminah, S.Pd',
+    email: 'siti.aminah@sman5garut.sch.id',
+    role: 'guru_ipa',
+    mapel: 'kimia',
+    kelas: null,
+    is_active: true,
+  });
+  assert.equal(addGuru.ok, true);
+  assert.ok(addGuru.createdId);
+  assert.equal(
+    addGuru.state.users.find((u) => u.id === addGuru.createdId)?.nama_lengkap,
+    'Siti Aminah, S.Pd'
+  );
+
+  // Tambah Siswa baru
+  const addSiswa = addUserState(addGuru.state, {
+    nama_lengkap: 'Farhan Maulana',
+    email: 'farhan.xi2@siswa.sman5garut.sch.id',
+    role: 'siswa',
+    mapel: null,
+    kelas: 'XI IPA 2',
+    is_active: true,
+  });
+  assert.equal(addSiswa.ok, true);
+  const newSiswaId = addSiswa.createdId!;
+
+  // Tambah Kepala Sekolah / TU baru
+  const addKepsek = addUserState(addSiswa.state, {
+    nama_lengkap: 'Drs. Wahyu Hidayat, M.Pd',
+    email: 'wahyu.tu@sman5garut.sch.id',
+    role: 'kepsek_tu',
+    mapel: null,
+    kelas: null,
+    is_active: true,
+  });
+  assert.equal(addKepsek.ok, true);
+  const newKepsekId = addKepsek.createdId!;
+
+  // Tolak email duplikat
+  const dupEmail = addUserState(addKepsek.state, {
+    nama_lengkap: 'Duplikat',
+    email: 'SITI.AMINAH@sman5garut.sch.id',
+    role: 'siswa',
+    mapel: null,
+    kelas: 'X IPA 1',
+    is_active: true,
+  });
+  assert.equal(dupEmail.ok, false);
+
+  // Edit user siswa & kepala sekolah
+  const editSiswa = updateUserState(
+    addKepsek.state,
+    newSiswaId,
+    {
+      nama_lengkap: 'Farhan Maulana Putra',
+      email: 'farhan.xi2@siswa.sman5garut.sch.id',
+      role: 'siswa',
+      mapel: null,
+      kelas: 'XII IPA 2',
+      is_active: true,
+    },
+    'usr-kalab-1'
+  );
+  assert.equal(editSiswa.ok, true);
+  assert.equal(
+    editSiswa.state.users.find((u) => u.id === newSiswaId)?.nama_lengkap,
+    'Farhan Maulana Putra'
+  );
+  assert.equal(editSiswa.state.users.find((u) => u.id === newSiswaId)?.kelas, 'XII IPA 2');
+
+  // Guard: tidak bisa menghapus admin aktif sendiri atau satu-satunya admin
+  const delSelf = deleteUserState(editSiswa.state, 'usr-kalab-1', 'usr-kalab-1');
+  assert.equal(delSelf.ok, false);
+  const delOnlyAdmin = deleteUserState(editSiswa.state, 'usr-kalab-1');
+  assert.equal(delOnlyAdmin.ok, false);
+
+  // Hapus guru, kepsek tambahan, dan siswa
+  const delGuru = deleteUserState(editSiswa.state, addGuru.createdId!, 'usr-kalab-1');
+  assert.equal(delGuru.ok, true);
+  const delKepsek = deleteUserState(delGuru.state, newKepsekId, 'usr-kalab-1');
+  assert.equal(delKepsek.ok, true);
+  const delSiswa = deleteUserState(delKepsek.state, newSiswaId, 'usr-kalab-1');
+  assert.equal(delSiswa.ok, true);
+  assert.equal(delSiswa.state.users.length, db0.users.length);
+});
+
+

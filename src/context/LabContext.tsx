@@ -11,16 +11,22 @@ import type {
   User,
 } from '../types/database';
 import {
+  addUserState,
   approvePengajuanState,
   cancelPengajuanState,
   completePengajuanState,
   computeChemicalStatus,
   createPengajuanState,
+  deleteUserState,
   getTodayIso,
   rejectPengajuanState,
   requestReturnByGuruState,
+  roleRequiresPassword,
+  updateUserState,
+  verifyRolePassword,
   type CreatePengajuanPayload,
   type ReturnInspectionInput,
+  type UpsertUserPayload,
 } from '../utils/labLogic';
 
 export type AppPage =
@@ -29,7 +35,8 @@ export type AppPage =
   | 'pengajuan'
   | 'jadwal'
   | 'modul'
-  | 'laporan';
+  | 'laporan'
+  | 'pengguna';
 
 export interface ToastMessage {
   id: string;
@@ -54,7 +61,7 @@ interface LabContextValue {
   toasts: ToastMessage[];
   dismissToast: (id: string) => void;
   notify: (type: ToastMessage['type'], text: string) => void;
-  loginAs: (userId: string) => void;
+  loginAs: (userId: string, password?: string) => { ok: boolean; error?: string };
   logout: () => void;
   resetDemoData: () => void;
   // Inventaris Alat
@@ -87,6 +94,10 @@ interface LabContextValue {
     pengajuanId: string,
     entries: { siswa_id: string; hadir: boolean; nilai: number | null; catatan: string | null }[]
   ) => void;
+  // Kelola Pengguna (Admin)
+  addUser: (payload: UpsertUserPayload) => { ok: boolean; error?: string; createdId?: string };
+  updateUser: (userId: string, payload: UpsertUserPayload) => { ok: boolean; error?: string };
+  deleteUser: (userId: string) => { ok: boolean; error?: string };
   // Helper navigate
   usePraktikumForPengajuan: (praktikumId: string) => void;
   openPengajuanDetail: (pengajuanId: string) => void;
@@ -177,14 +188,20 @@ export function LabProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const loginAs = useCallback(
-    (userId: string) => {
+    (userId: string, password?: string): { ok: boolean; error?: string } => {
       const user = db.users.find((u) => u.id === userId);
-      if (!user) return;
+      if (!user) {
+        return { ok: false, error: 'Akun pengguna tidak ditemukan.' };
+      }
+      if (roleRequiresPassword(user.role) && !verifyRolePassword(user.role, password ?? '')) {
+        return { ok: false, error: 'Password tidak sesuai. Silakan periksa kembali.' };
+      }
       setCurrentUserId(user.id);
       setActivePage(defaultPageForRole(user.role));
       setSelectedPengajuanId(null);
       setOpenPengajuanForm(false);
       notify('info', `Masuk sebagai ${user.nama_lengkap}`);
+      return { ok: true };
     },
     [db.users, notify]
   );
@@ -483,6 +500,49 @@ export function LabProvider({ children }: { children: React.ReactNode }) {
     [notify]
   );
 
+  const addUser = useCallback(
+    (payload: UpsertUserPayload): { ok: boolean; error?: string; createdId?: string } => {
+      const res = addUserState(db, payload);
+      if (!res.ok) {
+        if (res.error) notify('error', res.error);
+        return { ok: false, error: res.error };
+      }
+      setDb(res.state);
+      notify('success', `Pengguna "${payload.nama_lengkap.trim()}" berhasil ditambahkan.`);
+      return { ok: true, createdId: res.createdId };
+    },
+    [db, notify]
+  );
+
+  const updateUser = useCallback(
+    (userId: string, payload: UpsertUserPayload): { ok: boolean; error?: string } => {
+      const res = updateUserState(db, userId, payload, currentUser?.id);
+      if (!res.ok) {
+        if (res.error) notify('error', res.error);
+        return { ok: false, error: res.error };
+      }
+      setDb(res.state);
+      notify('success', `Data pengguna "${payload.nama_lengkap.trim()}" berhasil diperbarui.`);
+      return { ok: true };
+    },
+    [currentUser?.id, db, notify]
+  );
+
+  const deleteUser = useCallback(
+    (userId: string): { ok: boolean; error?: string } => {
+      const target = db.users.find((u) => u.id === userId);
+      const res = deleteUserState(db, userId, currentUser?.id);
+      if (!res.ok) {
+        if (res.error) notify('error', res.error);
+        return { ok: false, error: res.error };
+      }
+      setDb(res.state);
+      notify('info', `Pengguna "${target?.nama_lengkap ?? ''}" berhasil dihapus.`);
+      return { ok: true };
+    },
+    [currentUser?.id, db, notify]
+  );
+
   const usePraktikumForPengajuan = useCallback((praktikumId: string) => {
     setPrefillPraktikumId(praktikumId);
     setSelectedPengajuanId(null);
@@ -528,6 +588,9 @@ export function LabProvider({ children }: { children: React.ReactNode }) {
     addPraktikum,
     updatePraktikumLks,
     saveNilaiPraktikumBatch,
+    addUser,
+    updateUser,
+    deleteUser,
     usePraktikumForPengajuan,
     openPengajuanDetail,
   };

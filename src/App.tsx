@@ -11,6 +11,7 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './components/LoginPage';
 import { ModulPraktikumView } from './components/ModulPraktikumView';
 import { PengajuanView } from './components/PengajuanView';
+import { UsersView } from './components/UsersView';
 import { LabProvider, useLab } from './context/LabContext';
 
 function AppShell() {
@@ -28,6 +29,7 @@ function AppShell() {
       {activePage === 'jadwal' && <JadwalLabView />}
       {activePage === 'modul' && <ModulPraktikumView />}
       {activePage === 'laporan' && <LaporanView />}
+      {activePage === 'pengguna' && <UsersView />}
     </Layout>
   );
 }

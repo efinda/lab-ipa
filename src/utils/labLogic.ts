@@ -9,6 +9,8 @@ import type {
   PengajuanDetail,
   StatusBahanKimia,
   StatusPengajuan,
+  User,
+  UserRole,
 } from '../types/database';
 
 export function getTodayIso(now: Date = new Date()): string {
@@ -729,3 +731,219 @@ export function formatTanggalIndonesia(isoDate: string): string {
   }
   return `${d} ${bulan[m]} ${y}`;
 }
+
+export function roleRequiresPassword(role: UserRole): boolean {
+  return role === 'kepala_lab' || role === 'guru_ipa' || role === 'kepsek_tu';
+}
+
+export function verifyRolePassword(role: UserRole, inputPassword: string): boolean {
+  switch (role) {
+    case 'kepala_lab':
+      return inputPassword === '970145';
+    case 'guru_ipa':
+    case 'kepsek_tu':
+      return inputPassword === '@Sman5garut';
+    case 'siswa':
+      return true;
+  }
+}
+
+export interface UpsertUserPayload {
+  nama_lengkap: string;
+  email: string;
+  role: UserRole;
+  mapel: Mapel | null;
+  kelas: string | null;
+  is_active: boolean;
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateUserPayload(
+  state: LabDatabaseState,
+  payload: UpsertUserPayload,
+  excludeUserId?: string
+): { ok: true; normalized: UpsertUserPayload } | { ok: false; error: string } {
+  const nama = payload.nama_lengkap.trim();
+  const email = payload.email.trim().toLowerCase();
+
+  if (!nama) {
+    return { ok: false, error: 'Nama lengkap wajib diisi.' };
+  }
+  if (!email || !EMAIL_REGEX.test(email)) {
+    return { ok: false, error: 'Alamat email tidak valid.' };
+  }
+  const duplicateEmail = state.users.find(
+    (u) => u.id !== excludeUserId && u.email.trim().toLowerCase() === email
+  );
+  if (duplicateEmail) {
+    return { ok: false, error: `Email "${email}" sudah terdaftar pada pengguna lain.` };
+  }
+
+  let mapel: Mapel | null = null;
+  let kelas: string | null = null;
+
+  if (payload.role === 'guru_ipa') {
+    if (!payload.mapel) {
+      return { ok: false, error: 'Mata pelajaran wajib dipilih untuk Guru IPA.' };
+    }
+    mapel = payload.mapel;
+  } else if (payload.role === 'siswa') {
+    const k = (payload.kelas ?? '').trim();
+    if (!k) {
+      return { ok: false, error: 'Kelas wajib diisi untuk akun Siswa.' };
+    }
+    kelas = k;
+  }
+
+  return {
+    ok: true,
+    normalized: {
+      nama_lengkap: nama,
+      email,
+      role: payload.role,
+      mapel,
+      kelas,
+      is_active: payload.is_active,
+    },
+  };
+}
+
+export function addUserState(
+  state: LabDatabaseState,
+  payload: UpsertUserPayload,
+  nowIso: string = new Date().toISOString()
+): TransitionResult & { createdId?: string } {
+  const validation = validateUserPayload(state, payload);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error, state };
+  }
+
+  const createdId = `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const newUser: User = {
+    id: createdId,
+    nama_lengkap: validation.normalized.nama_lengkap,
+    email: validation.normalized.email,
+    password_hash: `demo-hash-${validation.normalized.role}`,
+    role: validation.normalized.role,
+    mapel: validation.normalized.mapel,
+    kelas: validation.normalized.kelas,
+    foto_profil: '',
+    is_active: validation.normalized.is_active,
+    created_at: nowIso,
+  };
+
+  return {
+    ok: true,
+    createdId,
+    state: {
+      ...state,
+      users: [...state.users, newUser],
+    },
+  };
+}
+
+export function updateUserState(
+  state: LabDatabaseState,
+  userId: string,
+  payload: UpsertUserPayload,
+  actingUserId?: string
+): TransitionResult {
+  const target = state.users.find((u) => u.id === userId);
+  if (!target) {
+    return { ok: false, error: 'Data pengguna tidak ditemukan.', state };
+  }
+
+  const validation = validateUserPayload(state, payload, userId);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error, state };
+  }
+
+  if (actingUserId && userId === actingUserId) {
+    if (validation.normalized.role !== 'kepala_lab' || !validation.normalized.is_active) {
+      return {
+        ok: false,
+        error: 'Tidak dapat menonaktifkan atau mengubah peran akun Admin yang sedang aktif.',
+        state,
+      };
+    }
+  }
+
+  if (
+    target.role === 'kepala_lab' &&
+    (validation.normalized.role !== 'kepala_lab' || !validation.normalized.is_active)
+  ) {
+    const otherActiveAdmins = state.users.filter(
+      (u) => u.id !== userId && u.role === 'kepala_lab' && u.is_active
+    );
+    if (otherActiveAdmins.length === 0) {
+      return {
+        ok: false,
+        error: 'Minimal harus ada satu Kepala Lab IPA (Admin) yang aktif.',
+        state,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      users: state.users.map((u) =>
+        u.id === userId
+          ? {
+              ...u,
+              nama_lengkap: validation.normalized.nama_lengkap,
+              email: validation.normalized.email,
+              role: validation.normalized.role,
+              mapel: validation.normalized.mapel,
+              kelas: validation.normalized.kelas,
+              is_active: validation.normalized.is_active,
+              password_hash: `demo-hash-${validation.normalized.role}`,
+            }
+          : u
+      ),
+    },
+  };
+}
+
+export function deleteUserState(
+  state: LabDatabaseState,
+  userId: string,
+  actingUserId?: string
+): TransitionResult {
+  const target = state.users.find((u) => u.id === userId);
+  if (!target) {
+    return { ok: false, error: 'Data pengguna tidak ditemukan.', state };
+  }
+  if (actingUserId && userId === actingUserId) {
+    return {
+      ok: false,
+      error: 'Tidak dapat menghapus akun yang sedang aktif digunakan.',
+      state,
+    };
+  }
+  if (target.role === 'kepala_lab') {
+    const remainingActiveAdmins = state.users.filter(
+      (u) => u.id !== userId && u.role === 'kepala_lab' && u.is_active
+    );
+    if (remainingActiveAdmins.length === 0) {
+      return {
+        ok: false,
+        error: 'Minimal harus ada satu Kepala Lab IPA (Admin) yang aktif.',
+        state,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      users: state.users.filter((u) => u.id !== userId),
+      nilai_praktikum: state.nilai_praktikum.filter((n) => n.siswa_id !== userId),
+    },
+  };
+}
+
+

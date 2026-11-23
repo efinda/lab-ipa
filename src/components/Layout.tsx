@@ -11,11 +11,13 @@ import {
   LogOut,
   Menu,
   Package,
+  Users,
   X,
 } from 'lucide-react';
 import { useLab, type AppPage } from '../context/LabContext';
-import type { UserRole } from '../types/database';
-import { formatTanggalIndonesia } from '../utils/labLogic';
+import type { User, UserRole } from '../types/database';
+import { formatTanggalIndonesia, roleRequiresPassword } from '../utils/labLogic';
+import { PasswordModal } from './PasswordModal';
 
 interface NavItem {
   id: AppPage;
@@ -61,6 +63,12 @@ const NAV_ITEMS: NavItem[] = [
     icon: FileSpreadsheet,
     roles: ['kepala_lab', 'kepsek_tu', 'guru_ipa'],
   },
+  {
+    id: 'pengguna',
+    label: 'Kelola Pengguna',
+    icon: Users,
+    roles: ['kepala_lab'],
+  },
 ];
 
 function formatRoleLabel(role: UserRole, mapel: string | null): string {
@@ -92,6 +100,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [roleSwitchOpen, setRoleSwitchOpen] = useState(false);
+  const [pendingSwitchUser, setPendingSwitchUser] = useState<User | null>(null);
 
   if (!currentUser) return null;
 
@@ -110,9 +119,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     setMobileMenuOpen(false);
   };
 
-  const quickUsers = db.users.filter(
-    (u) => u.role !== 'siswa' || u.id === 'usr-siswa-1'
-  );
+  const quickUsers = db.users.filter((u) => u.is_active);
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
@@ -412,7 +419,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           type="button"
                           onClick={() => {
                             setRoleSwitchOpen(false);
-                            loginAs(u.id);
+                            if (u.id === currentUser.id) return;
+                            if (roleRequiresPassword(u.role)) {
+                              setPendingSwitchUser(u);
+                            } else {
+                              loginAs(u.id);
+                            }
                           }}
                           className={`w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition-colors ${
                             isCurrent ? 'bg-slate-50' : ''
@@ -482,6 +494,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </div>
       )}
+
+      <PasswordModal
+        user={pendingSwitchUser}
+        onClose={() => setPendingSwitchUser(null)}
+        onSubmitPassword={(user, password) => loginAs(user.id, password)}
+      />
     </div>
   );
 }
