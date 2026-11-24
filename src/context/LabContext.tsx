@@ -3,14 +3,12 @@ import { createInitialDatabaseState } from '../data/seedData';
 import type {
   Alat,
   BahanKimia,
-  KelasSMA,
   LabDatabaseState,
-  Mapel,
   NilaiPraktikum,
-  Praktikum,
   User,
 } from '../types/database';
 import {
+  addPraktikumState,
   addUserState,
   approvePengajuanState,
   cancelPengajuanState,
@@ -22,10 +20,12 @@ import {
   rejectPengajuanState,
   requestReturnByGuruState,
   roleRequiresPassword,
+  updatePraktikumState,
   updateUserState,
   verifyRolePassword,
   type CreatePengajuanPayload,
   type ReturnInspectionInput,
+  type UpsertPraktikumPayload,
   type UpsertUserPayload,
 } from '../utils/labLogic';
 
@@ -80,15 +80,8 @@ interface LabContextValue {
   completePengajuanInspection: (pengajuanId: string, inspections: ReturnInspectionInput[]) => { ok: boolean; error?: string };
   cancelPengajuan: (pengajuanId: string) => { ok: boolean; error?: string };
   // Modul & Nilai
-  addPraktikum: (data: {
-    judul_praktikum: string;
-    mapel: Mapel;
-    kelas: KelasSMA;
-    deskripsi: string;
-    lks_url: string;
-    estimasi_waktu_menit: number;
-    items: { item_type: 'alat' | 'bahan_kimia'; item_id: string; jumlah_dibutuhkan: number }[];
-  }) => void;
+  addPraktikum: (data: UpsertPraktikumPayload) => { ok: boolean; error?: string; createdId?: string };
+  updatePraktikum: (praktikumId: string, data: UpsertPraktikumPayload) => { ok: boolean; error?: string };
   updatePraktikumLks: (praktikumId: string, lksUrl: string) => void;
   saveNilaiPraktikumBatch: (
     pengajuanId: string,
@@ -425,41 +418,36 @@ export function LabProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addPraktikum = useCallback(
-    (data: {
-      judul_praktikum: string;
-      mapel: Mapel;
-      kelas: KelasSMA;
-      deskripsi: string;
-      lks_url: string;
-      estimasi_waktu_menit: number;
-      items: { item_type: 'alat' | 'bahan_kimia'; item_id: string; jumlah_dibutuhkan: number }[];
-    }) => {
-      const id = `prk-${Date.now()}`;
-      const newPrk: Praktikum = {
-        id,
-        judul_praktikum: data.judul_praktikum,
-        mapel: data.mapel,
-        kelas: data.kelas,
-        deskripsi: data.deskripsi,
-        lks_url: data.lks_url || `LKS-${data.mapel.toUpperCase()}-${data.kelas}.pdf`,
-        dibuat_oleh: currentUser?.id ?? 'usr-guru-fis',
-        estimasi_waktu_menit: data.estimasi_waktu_menit,
-      };
-      const newItems = data.items.map((it, idx) => ({
-        id: `pa-${Date.now()}-${idx}`,
-        praktikum_id: id,
-        item_type: it.item_type,
-        item_id: it.item_id,
-        jumlah_dibutuhkan: it.jumlah_dibutuhkan,
-      }));
-      setDb((prev) => ({
-        ...prev,
-        praktikum: [newPrk, ...prev.praktikum],
-        praktikum_alat: [...newItems, ...prev.praktikum_alat],
-      }));
-      notify('success', `Modul praktikum "${newPrk.judul_praktikum}" ditambahkan.`);
+    (data: UpsertPraktikumPayload): { ok: boolean; error?: string; createdId?: string } => {
+      const res = addPraktikumState(
+        db,
+        data,
+        currentUser?.id ?? 'usr-guru-fis',
+        currentUser?.role
+      );
+      if (!res.ok) {
+        if (res.error) notify('error', res.error);
+        return { ok: false, error: res.error };
+      }
+      setDb(res.state);
+      notify('success', `Modul praktikum "${data.judul_praktikum.trim()}" ditambahkan.`);
+      return { ok: true, createdId: res.createdId };
     },
-    [currentUser?.id, notify]
+    [currentUser?.id, currentUser?.role, db, notify]
+  );
+
+  const updatePraktikum = useCallback(
+    (praktikumId: string, data: UpsertPraktikumPayload): { ok: boolean; error?: string } => {
+      const res = updatePraktikumState(db, praktikumId, data, currentUser?.role);
+      if (!res.ok) {
+        if (res.error) notify('error', res.error);
+        return { ok: false, error: res.error };
+      }
+      setDb(res.state);
+      notify('success', `Modul praktikum "${data.judul_praktikum.trim()}" berhasil diperbarui.`);
+      return { ok: true };
+    },
+    [currentUser?.role, db, notify]
   );
 
   const updatePraktikumLks = useCallback(
@@ -586,6 +574,7 @@ export function LabProvider({ children }: { children: React.ReactNode }) {
     completePengajuanInspection,
     cancelPengajuan,
     addPraktikum,
+    updatePraktikum,
     updatePraktikumLks,
     saveNilaiPraktikumBatch,
     addUser,

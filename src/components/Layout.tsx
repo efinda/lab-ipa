@@ -55,7 +55,7 @@ const NAV_ITEMS: NavItem[] = [
     id: 'modul',
     label: 'Modul & Nilai Praktikum',
     icon: BookOpen,
-    roles: ['kepala_lab', 'guru_ipa'],
+    roles: ['kepala_lab', 'guru_ipa', 'siswa', 'kepsek_tu'],
   },
   {
     id: 'laporan',
@@ -147,6 +147,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
               item.id === 'pengajuan' && pendingPengajuan.length > 0
                 ? pendingPengajuan.length
                 : null;
+            const itemLabel =
+              item.id === 'modul' &&
+              currentUser.role !== 'kepala_lab' &&
+              currentUser.role !== 'guru_ipa'
+                ? 'Modul Praktikum'
+                : item.label;
             return (
               <button
                 key={item.id}
@@ -160,7 +166,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               >
                 <span className="flex items-center gap-3 min-w-0">
                   <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-[#0F2744]' : 'text-slate-300'}`} />
-                  <span className="truncate">{item.label}</span>
+                  <span className="truncate">{itemLabel}</span>
                 </span>
                 {badge !== null && (
                   <span

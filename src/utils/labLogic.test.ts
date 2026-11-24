@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInitialDatabaseState } from '../data/seedData';
 import {
+  addPraktikumState,
   addUserState,
   approvePengajuanState,
+  canManagePraktikumRole,
   checkScheduleConflict,
   completePengajuanState,
   computeChemicalStatus,
@@ -13,6 +15,7 @@ import {
   rejectPengajuanState,
   requestReturnByGuruState,
   roleRequiresPassword,
+  updatePraktikumState,
   updateUserState,
   validateItemStock,
   verifyRolePassword,
@@ -280,5 +283,85 @@ test('admin dapat menambah, mengedit, dan menghapus user guru, kepala sekolah, d
   assert.equal(delSiswa.ok, true);
   assert.equal(delSiswa.state.users.length, db0.users.length);
 });
+
+test('admin dan guru dapat menambah dan mengedit modul praktikum, sedangkan siswa/kepsek ditolak', () => {
+  const db0 = createInitialDatabaseState();
+  assert.equal(canManagePraktikumRole('kepala_lab'), true);
+  assert.equal(canManagePraktikumRole('guru_ipa'), true);
+  assert.equal(canManagePraktikumRole('siswa'), false);
+  assert.equal(canManagePraktikumRole('kepsek_tu'), false);
+  assert.equal(canManagePraktikumRole(null), false);
+
+  const deniedSiswa = addPraktikumState(
+    db0,
+    {
+      judul_praktikum: 'Uji Coba Siswa',
+      mapel: 'fisika',
+      kelas: 'X',
+      deskripsi: 'Seharusnya ditolak',
+      lks_url: 'LKS-TEST.pdf',
+      estimasi_waktu_menit: 90,
+      items: [{ item_type: 'alat', item_id: 'alt-fis-01', jumlah_dibutuhkan: 4 }],
+    },
+    'usr-siswa-1',
+    'siswa'
+  );
+  assert.equal(deniedSiswa.ok, false);
+
+  // Guru IPA menambah modul baru
+  const addedByGuru = addPraktikumState(
+    db0,
+    {
+      judul_praktikum: 'Percobaan Ayunan Bandul Sederhana',
+      mapel: 'fisika',
+      kelas: 'X',
+      deskripsi: 'Menentukan percepatan gravitasi bumi menggunakan bandul matematis.',
+      lks_url: 'LKS-FIS-BANDUL.pdf',
+      estimasi_waktu_menit: 90,
+      items: [
+        { item_type: 'alat', item_id: 'alt-fis-04', jumlah_dibutuhkan: 6 },
+        { item_type: 'alat', item_id: 'alt-fis-01', jumlah_dibutuhkan: 6 },
+      ],
+    },
+    'usr-guru-fis',
+    'guru_ipa'
+  );
+  assert.equal(addedByGuru.ok, true);
+  assert.ok(addedByGuru.createdId);
+  const createdPrk = addedByGuru.state.praktikum.find((p) => p.id === addedByGuru.createdId)!;
+  assert.equal(createdPrk.judul_praktikum, 'Percobaan Ayunan Bandul Sederhana');
+  assert.equal(createdPrk.dibuat_oleh, 'usr-guru-fis');
+  assert.equal(
+    addedByGuru.state.praktikum_alat.filter((pa) => pa.praktikum_id === createdPrk.id).length,
+    2
+  );
+
+  // Admin mengedit modul tersebut (mengubah judul, waktu, dan item)
+  const editedByAdmin = updatePraktikumState(
+    addedByGuru.state,
+    createdPrk.id,
+    {
+      judul_praktikum: 'Percobaan Ayunan Bandul & Gravitasi',
+      mapel: 'fisika',
+      kelas: 'XI',
+      deskripsi: 'Menentukan percepatan gravitasi lokal melalui grafik periode kuadrat.',
+      lks_url: 'LKS-FIS-BANDUL-REV.pdf',
+      estimasi_waktu_menit: 120,
+      items: [{ item_type: 'alat', item_id: 'alt-fis-04', jumlah_dibutuhkan: 8 }],
+    },
+    'kepala_lab'
+  );
+  assert.equal(editedByAdmin.ok, true);
+  const updatedPrk = editedByAdmin.state.praktikum.find((p) => p.id === createdPrk.id)!;
+  assert.equal(updatedPrk.judul_praktikum, 'Percobaan Ayunan Bandul & Gravitasi');
+  assert.equal(updatedPrk.kelas, 'XI');
+  assert.equal(updatedPrk.estimasi_waktu_menit, 120);
+  const updatedItems = editedByAdmin.state.praktikum_alat.filter(
+    (pa) => pa.praktikum_id === createdPrk.id
+  );
+  assert.equal(updatedItems.length, 1);
+  assert.equal(updatedItems[0].jumlah_dibutuhkan, 8);
+});
+
 
 

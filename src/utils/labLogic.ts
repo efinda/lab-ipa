@@ -1,12 +1,16 @@
 import type {
   Alat,
   BahanKimia,
+  ItemType,
   JadwalLab,
+  KelasSMA,
   KondisiAlat,
   LabDatabaseState,
   Mapel,
   Pengajuan,
   PengajuanDetail,
+  Praktikum,
+  PraktikumAlat,
   StatusBahanKimia,
   StatusPengajuan,
   User,
@@ -945,5 +949,193 @@ export function deleteUserState(
     },
   };
 }
+
+export interface PraktikumItemPayload {
+  item_type: ItemType;
+  item_id: string;
+  jumlah_dibutuhkan: number;
+}
+
+export interface UpsertPraktikumPayload {
+  judul_praktikum: string;
+  mapel: Mapel;
+  kelas: KelasSMA;
+  deskripsi: string;
+  lks_url: string;
+  estimasi_waktu_menit: number;
+  items: PraktikumItemPayload[];
+}
+
+export function canManagePraktikumRole(role: UserRole | null | undefined): boolean {
+  return role === 'kepala_lab' || role === 'guru_ipa';
+}
+
+function validatePraktikumPayload(
+  payload: UpsertPraktikumPayload
+): { ok: true; normalized: UpsertPraktikumPayload } | { ok: false; error: string } {
+  const judul = payload.judul_praktikum.trim();
+  const deskripsi = payload.deskripsi.trim();
+  const estimasi = Math.round(Number(payload.estimasi_waktu_menit));
+
+  if (!judul) {
+    return { ok: false, error: 'Judul praktikum wajib diisi.' };
+  }
+  if (!deskripsi) {
+    return { ok: false, error: 'Deskripsi modul praktikum wajib diisi.' };
+  }
+  if (!Number.isFinite(estimasi) || estimasi <= 0) {
+    return { ok: false, error: 'Estimasi waktu praktikum harus lebih dari 0 menit.' };
+  }
+
+  const validItemsMap = new Map<string, PraktikumItemPayload>();
+  for (const item of payload.items) {
+    if (!item.item_id) continue;
+    const qty = Number(item.jumlah_dibutuhkan);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return { ok: false, error: 'Jumlah alat/bahan yang dibutuhkan harus lebih dari 0.' };
+    }
+    const key = `${item.item_type}:${item.item_id}`;
+    const existing = validItemsMap.get(key);
+    if (existing) {
+      validItemsMap.set(key, {
+        ...existing,
+        jumlah_dibutuhkan: existing.jumlah_dibutuhkan + qty,
+      });
+    } else {
+      validItemsMap.set(key, {
+        item_type: item.item_type,
+        item_id: item.item_id,
+        jumlah_dibutuhkan: qty,
+      });
+    }
+  }
+
+  const normalizedItems = Array.from(validItemsMap.values());
+  if (normalizedItems.length === 0) {
+    return { ok: false, error: 'Minimal pilih 1 alat atau bahan kimia untuk modul praktikum.' };
+  }
+
+  const lksUrl =
+    payload.lks_url.trim() || `LKS-${payload.mapel.toUpperCase()}-${payload.kelas}.pdf`;
+
+  return {
+    ok: true,
+    normalized: {
+      judul_praktikum: judul,
+      mapel: payload.mapel,
+      kelas: payload.kelas,
+      deskripsi,
+      lks_url: lksUrl,
+      estimasi_waktu_menit: estimasi,
+      items: normalizedItems,
+    },
+  };
+}
+
+export function addPraktikumState(
+  state: LabDatabaseState,
+  payload: UpsertPraktikumPayload,
+  actingUserId: string,
+  actingUserRole: UserRole | null | undefined
+): TransitionResult & { createdId?: string } {
+  if (!canManagePraktikumRole(actingUserRole)) {
+    return {
+      ok: false,
+      error: 'Hanya Admin (Kepala Lab) atau Guru IPA yang dapat menambah modul praktikum.',
+      state,
+    };
+  }
+
+  const validation = validatePraktikumPayload(payload);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error, state };
+  }
+
+  const id = `prk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const newPrk: Praktikum = {
+    id,
+    judul_praktikum: validation.normalized.judul_praktikum,
+    mapel: validation.normalized.mapel,
+    kelas: validation.normalized.kelas,
+    deskripsi: validation.normalized.deskripsi,
+    lks_url: validation.normalized.lks_url,
+    dibuat_oleh: actingUserId,
+    estimasi_waktu_menit: validation.normalized.estimasi_waktu_menit,
+  };
+
+  const newItems: PraktikumAlat[] = validation.normalized.items.map((it, idx) => ({
+    id: `pa-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+    praktikum_id: id,
+    item_type: it.item_type,
+    item_id: it.item_id,
+    jumlah_dibutuhkan: it.jumlah_dibutuhkan,
+  }));
+
+  return {
+    ok: true,
+    createdId: id,
+    state: {
+      ...state,
+      praktikum: [newPrk, ...state.praktikum],
+      praktikum_alat: [...newItems, ...state.praktikum_alat],
+    },
+  };
+}
+
+export function updatePraktikumState(
+  state: LabDatabaseState,
+  praktikumId: string,
+  payload: UpsertPraktikumPayload,
+  actingUserRole: UserRole | null | undefined
+): TransitionResult {
+  if (!canManagePraktikumRole(actingUserRole)) {
+    return {
+      ok: false,
+      error: 'Hanya Admin (Kepala Lab) atau Guru IPA yang dapat mengedit modul praktikum.',
+      state,
+    };
+  }
+
+  const target = state.praktikum.find((p) => p.id === praktikumId);
+  if (!target) {
+    return { ok: false, error: 'Modul praktikum tidak ditemukan.', state };
+  }
+
+  const validation = validatePraktikumPayload(payload);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error, state };
+  }
+
+  const updatedPrk: Praktikum = {
+    ...target,
+    judul_praktikum: validation.normalized.judul_praktikum,
+    mapel: validation.normalized.mapel,
+    kelas: validation.normalized.kelas,
+    deskripsi: validation.normalized.deskripsi,
+    lks_url: validation.normalized.lks_url,
+    estimasi_waktu_menit: validation.normalized.estimasi_waktu_menit,
+  };
+
+  const replacedItems: PraktikumAlat[] = validation.normalized.items.map((it, idx) => ({
+    id: `pa-${praktikumId}-${Date.now()}-${idx}`,
+    praktikum_id: praktikumId,
+    item_type: it.item_type,
+    item_id: it.item_id,
+    jumlah_dibutuhkan: it.jumlah_dibutuhkan,
+  }));
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      praktikum: state.praktikum.map((p) => (p.id === praktikumId ? updatedPrk : p)),
+      praktikum_alat: [
+        ...state.praktikum_alat.filter((pa) => pa.praktikum_id !== praktikumId),
+        ...replacedItems,
+      ],
+    },
+  };
+}
+
 
 
